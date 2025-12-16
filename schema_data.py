@@ -1,23 +1,23 @@
 DDL_STATEMENTS = '''
 CREATE TABLE workspaces (
-    id UUID PRIMARY KEY,
+    id CHAR(36) PRIMARY KEY,
     name TEXT NOT NULL,
-    owner_id UUID,
+    owner_id CHAR(36),
     created_at TIMESTAMP,
     plan TEXT DEFAULT 'free',
     status TEXT DEFAULT 'active'
 );
 CREATE TABLE users (
-    id UUID PRIMARY KEY,
+    id CHAR(36) PRIMARY KEY,
     email TEXT NOT NULL,
     name TEXT NOT NULL,
-    workspace_id UUID REFERENCES workspaces(id),
+    workspace_id CHAR(36) REFERENCES workspaces(id),
     role TEXT DEFAULT 'member',
     created_at TIMESTAMP
 );
 CREATE TABLE agents (
-    id UUID PRIMARY KEY,
-    workspace_id UUID REFERENCES workspaces(id),
+    id CHAR(36) PRIMARY KEY,
+    workspace_id CHAR(36) REFERENCES workspaces(id),
     name TEXT NOT NULL,
     language TEXT DEFAULT 'en',
     llm_model TEXT DEFAULT 'gpt-4',
@@ -25,25 +25,25 @@ CREATE TABLE agents (
     created_at TIMESTAMP
 );
 CREATE TABLE integrations (
-    id UUID PRIMARY KEY,
-    workspace_id UUID REFERENCES workspaces(id),
+    id CHAR(36) PRIMARY KEY,
+    workspace_id CHAR(36) REFERENCES workspaces(id),
     type TEXT NOT NULL,
-    config JSONB,
+    config JSON,
     status TEXT DEFAULT 'active',
     last_sync_at TIMESTAMP,
     created_at TIMESTAMP
 );
 CREATE TABLE agent_tools (
-    id UUID PRIMARY KEY,
-    agent_id UUID REFERENCES agents(id),
+    id CHAR(36) PRIMARY KEY,
+    agent_id CHAR(36) REFERENCES agents(id),
     tool_name TEXT NOT NULL,
-    tool_config JSONB,
+    tool_config JSON,
     created_at TIMESTAMP
 );
 CREATE TABLE agent_runs (
-    id UUID PRIMARY KEY,
-    agent_id UUID REFERENCES agents(id),
-    workspace_id UUID REFERENCES workspaces(id),
+    id CHAR(36) PRIMARY KEY,
+    agent_id CHAR(36) REFERENCES agents(id),
+    workspace_id CHAR(36) REFERENCES workspaces(id),
     run_type TEXT DEFAULT 'test_call',
     status TEXT DEFAULT 'success',
     duration_ms INTEGER,
@@ -51,9 +51,9 @@ CREATE TABLE agent_runs (
     completed_at TIMESTAMP
 );
 CREATE TABLE test_runs (
-    id UUID PRIMARY KEY,
-    agent_id UUID REFERENCES agents(id),
-    workspace_id UUID REFERENCES workspaces(id),
+    id CHAR(36) PRIMARY KEY,
+    agent_id CHAR(36) REFERENCES agents(id),
+    workspace_id CHAR(36) REFERENCES workspaces(id),
     test_input TEXT,
     expected_output TEXT,
     actual_output TEXT,
@@ -62,28 +62,28 @@ CREATE TABLE test_runs (
     created_at TIMESTAMP
 );
 CREATE TABLE run_logs (
-    id UUID PRIMARY KEY,
-    run_id UUID REFERENCES agent_runs(id),
+    id CHAR(36) PRIMARY KEY,
+    run_id CHAR(36) REFERENCES agent_runs(id),
     step INTEGER,
     event_type TEXT,
     message TEXT,
-    payload JSONB,
+    payload JSON,
     timestamp TIMESTAMP
 );
 CREATE TABLE errors (
-    id UUID PRIMARY KEY,
-    run_id UUID REFERENCES agent_runs(id),
-    workspace_id UUID REFERENCES workspaces(id),
+    id CHAR(36) PRIMARY KEY,
+    run_id CHAR(36) REFERENCES agent_runs(id),
+    workspace_id CHAR(36) REFERENCES workspaces(id),
     source TEXT,
     code TEXT,
     message TEXT,
-    metadata JSONB,
+    metadata JSON,
     created_at TIMESTAMP
 );
 CREATE TABLE integration_sync_logs (
-    id UUID PRIMARY KEY,
-    integration_id UUID REFERENCES integrations(id),
-    workspace_id UUID REFERENCES workspaces(id),
+    id CHAR(36) PRIMARY KEY,
+    integration_id CHAR(36) REFERENCES integrations(id),
+    workspace_id CHAR(36) REFERENCES workspaces(id),
     sync_type TEXT,
     status TEXT DEFAULT 'success',
     items_synced INTEGER,
@@ -91,9 +91,9 @@ CREATE TABLE integration_sync_logs (
     created_at TIMESTAMP
 );
 CREATE TABLE billing_usage (
-    id UUID PRIMARY KEY,
-    workspace_id UUID REFERENCES workspaces(id),
-    agent_id UUID REFERENCES agents(id),
+    id CHAR(36) PRIMARY KEY,
+    workspace_id CHAR(36) REFERENCES workspaces(id),
+    agent_id CHAR(36) REFERENCES agents(id),
     characters_generated INTEGER,
     calls_made INTEGER,
     tokens_used INTEGER,
@@ -101,13 +101,13 @@ CREATE TABLE billing_usage (
     created_at TIMESTAMP
 );
 CREATE TABLE audit_events (
-    id UUID PRIMARY KEY,
-    workspace_id UUID REFERENCES workspaces(id),
-    user_id UUID REFERENCES users(id),
+    id CHAR(36) PRIMARY KEY,
+    workspace_id CHAR(36) REFERENCES workspaces(id),
+    user_id CHAR(36) REFERENCES users(id),
     action TEXT,
     entity TEXT,
-    before JSONB,
-    after JSONB,
+    before JSON,
+    after JSON,
     created_at TIMESTAMP
 );
 '''
@@ -131,11 +131,11 @@ Tables and their purposes:
 
 SAMPLE_QUERIES = [
     ("Show me all the failed test runs for agent X last week", 
-     "SELECT tr.*, a.name as agent_name FROM test_runs tr JOIN agents a ON tr.agent_id = a.id WHERE tr.result = 'fail' AND tr.created_at >= NOW() - INTERVAL '7 days' ORDER BY tr.created_at DESC"),
+     "SELECT tr.*, a.name as agent_name FROM test_runs tr JOIN agents a ON tr.agent_id = a.id WHERE tr.result = 'fail' AND tr.created_at >= datetime('now', '-7 days') ORDER BY tr.created_at DESC"),
     ("Which integrations are inactive for workspace Y",
      "SELECT i.*, w.name as workspace_name FROM integrations i JOIN workspaces w ON i.workspace_id = w.id WHERE i.status = 'inactive'"),
     ("Top 5 errors for the last 24 hours",
-     "SELECT code, message, source, COUNT(*) as error_count FROM errors WHERE created_at >= NOW() - INTERVAL '24 hours' GROUP BY code, message, source ORDER BY error_count DESC LIMIT 5"),
+     "SELECT code, message, source, COUNT(*) as error_count FROM errors WHERE created_at >= datetime('now', '-24 hours') GROUP BY code, message, source ORDER BY error_count DESC LIMIT 5"),
     ("List all agents using Gujarati",
      "SELECT a.*, w.name as workspace_name FROM agents a JOIN workspaces w ON a.workspace_id = w.id WHERE a.language = 'gu'"),
     ("Show all sync logs for HubSpot integrations",

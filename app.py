@@ -80,10 +80,14 @@ def get_explain_plan(sql_query):
     engine = get_engine()
     try:
         with engine.connect() as conn:
-            explain_sql = f"EXPLAIN ANALYZE {sql_query}"
+            # SQLite uses EXPLAIN QUERY PLAN instead of EXPLAIN ANALYZE
+            if 'sqlite' in DATABASE_URL.lower():
+                explain_sql = f"EXPLAIN QUERY PLAN {sql_query}"
+            else:
+                explain_sql = f"EXPLAIN ANALYZE {sql_query}"
             result = conn.execute(text(explain_sql))
             rows = result.fetchall()
-            plan_text = "\n".join([row[0] for row in rows])
+            plan_text = "\n".join([str(row[0]) if len(row) == 1 else ' | '.join(map(str, row)) for row in rows])
             return plan_text, None
     except Exception as e:
         return None, str(e)
@@ -112,17 +116,26 @@ def get_vanna():
             'model': 'gpt-4'  # Fixed model name from gpt-5
         })
         
-        # Parse connection string for Vanna
+        # Connect to database based on URL type
         from sqlalchemy.engine.url import make_url
         url = make_url(DATABASE_URL)
         
-        vn.connect_to_postgres(
-            host=url.host,
-            dbname=url.database,
-            user=url.username,
-            password=url.password,
-            port=url.port or 5432
-        )
+        if 'sqlite' in DATABASE_URL.lower():
+            # For SQLite, use the file path from the URL
+            import os
+            db_path = url.database
+            if not os.path.isabs(db_path):
+                # Handle relative paths
+                db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), db_path)
+            vn.connect_to_sqlite(db_path)
+        else:
+            vn.connect_to_postgres(
+                host=url.host,
+                dbname=url.database,
+                user=url.username,
+                password=url.password,
+                port=url.port or 5432
+            )
         
         return vn
     except Exception as e:
@@ -184,9 +197,9 @@ def export_to_excel(df):
 
 QUERY_TEMPLATES = {
     "Error Analysis": {
-        "Top Errors (Last 24h)": "SELECT code, message, source, COUNT(*) as error_count FROM errors WHERE created_at >= NOW() - INTERVAL '24 hours' GROUP BY code, message, source ORDER BY error_count DESC LIMIT 10",
+        "Top Errors (Last 24h)": "SELECT code, message, source, COUNT(*) as error_count FROM errors WHERE created_at >= datetime('now', '-24 hours') GROUP BY code, message, source ORDER BY error_count DESC LIMIT 10",
         "Errors by Source": "SELECT source, COUNT(*) as count FROM errors GROUP BY source ORDER BY count DESC",
-        "Error Trend (Last 7 Days)": "SELECT DATE(created_at) as date, COUNT(*) as error_count FROM errors WHERE created_at >= NOW() - INTERVAL '7 days' GROUP BY DATE(created_at) ORDER BY date",
+        "Error Trend (Last 7 Days)": "SELECT date(created_at) as date, COUNT(*) as error_count FROM errors WHERE created_at >= datetime('now', '-7 days') GROUP BY date(created_at) ORDER BY date",
     },
     "Agent Performance": {
         "Agent Run Status Summary": "SELECT a.name as agent_name, ar.status, COUNT(*) as count FROM agent_runs ar JOIN agents a ON ar.agent_id = a.id GROUP BY a.name, ar.status ORDER BY a.name",
@@ -204,7 +217,7 @@ QUERY_TEMPLATES = {
         "Billing Summary by Workspace": "SELECT w.name as workspace_name, SUM(b.total_cost_usd) as total_cost, SUM(b.tokens_used) as total_tokens FROM billing_usage b JOIN workspaces w ON b.workspace_id = w.id GROUP BY w.id, w.name ORDER BY total_cost DESC",
     },
     "Usage Metrics": {
-        "Daily Usage (Last 7 Days)": "SELECT DATE(created_at) as date, SUM(tokens_used) as tokens, SUM(calls_made) as calls FROM billing_usage WHERE created_at >= NOW() - INTERVAL '7 days' GROUP BY DATE(created_at) ORDER BY date",
+        "Daily Usage (Last 7 Days)": "SELECT date(created_at) as date, SUM(tokens_used) as tokens, SUM(calls_made) as calls FROM billing_usage WHERE created_at >= datetime('now', '-7 days') GROUP BY date(created_at) ORDER BY date",
         "Top Token Users": "SELECT a.name as agent_name, SUM(b.tokens_used) as total_tokens FROM billing_usage b JOIN agents a ON b.agent_id = a.id GROUP BY a.name ORDER BY total_tokens DESC LIMIT 10",
     }
 }
@@ -503,7 +516,7 @@ with tab2:
     
     with col1:
         st.markdown("#### Error Trends (Last 7 Days)")
-        error_trend_sql = "SELECT DATE(created_at) as date, COUNT(*) as error_count FROM errors WHERE created_at >= NOW() - INTERVAL '7 days' GROUP BY DATE(created_at) ORDER BY date"
+        error_trend_sql = "SELECT date(created_at) as date, COUNT(*) as error_count FROM errors WHERE created_at >= datetime('now', '-7 days') GROUP BY date(created_at) ORDER BY date"
         df, error = execute_sql(error_trend_sql)
         if not error and len(df) > 0:
             fig = px.line(df, x='date', y='error_count', title='Errors Over Time')
@@ -544,7 +557,7 @@ with tab2:
             st.info("No integration data available")
     
     st.markdown("#### Usage Over Time")
-    usage_sql = "SELECT DATE(created_at) as date, SUM(tokens_used) as tokens, SUM(calls_made) as calls FROM billing_usage WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY DATE(created_at) ORDER BY date"
+    usage_sql = "SELECT date(created_at) as date, SUM(tokens_used) as tokens, SUM(calls_made) as calls FROM billing_usage WHERE created_at >= datetime('now', '-30 days') GROUP BY date(created_at) ORDER BY date"
     df, error = execute_sql(usage_sql)
     if not error and len(df) > 0:
         fig = go.Figure()
