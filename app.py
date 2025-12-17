@@ -20,33 +20,65 @@ st.set_page_config(
 )
 
 from schema_data import DDL_STATEMENTS, DOCUMENTATION, SAMPLE_QUERIES
+from ollama_nl_sql import OllamaNLtoSQL
+from local_nl_sql import LocalNLtoSQL  # Fallback only
+# Removed: Gemini, OpenAI - Using Ollama only
 
 # Initialize session state configuration
 if 'db_url' not in st.session_state:
     st.session_state.db_url = os.environ.get("DATABASE_URL", "")
-if 'openai_key' not in st.session_state:
-    st.session_state.openai_key = os.environ.get("OPENAI_API_KEY", "")
+if 'ollama_model' not in st.session_state:
+    st.session_state.ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.1")
+if 'nl_parser' not in st.session_state:
+    # Use ONLY Ollama, fallback to local patterns if Ollama unavailable
+    try:
+        st.session_state.nl_parser = OllamaNLtoSQL(model=st.session_state.ollama_model)
+        st.session_state.parser_type = "ollama"
+    except Exception as e:
+        print(f"Ollama not available: {e}")
+        st.session_state.nl_parser = LocalNLtoSQL()
+        st.session_state.parser_type = "local"
 
 with st.sidebar:
     st.title("⚙️ Configuration")
     
     # Configuration form
-    with st.expander("Connection Settings", expanded=not (st.session_state.db_url and st.session_state.openai_key)):
+    with st.expander("Connection Settings", expanded=not st.session_state.db_url):
         new_db_url = st.text_input(
             "Database URL", 
             value=st.session_state.db_url,
             type="password",
-            help="postgresql://user:password@host:port/dbname"
+            help="sqlite:///path/to/database.db"
         )
-        new_openai_key = st.text_input(
-            "OpenAI API Key",
-            value=st.session_state.openai_key,
-            type="password"
+        
+        st.markdown("### 🏠 Ollama (Local LLM)")
+        st.info("Using Ollama for completely private and free NL-to-SQL conversion.")
+        
+        new_ollama_model = st.text_input(
+            "Ollama Model",
+            value=st.session_state.ollama_model,
+            help="Recommended: llama3.1, mistral, codellama, deepseek-coder"
         )
+        
+        st.markdown("### 📝 Quick Start")
+        st.code("ollama pull llama3.1", language="bash")
+        st.caption("Run this command to install the model")
         
         if st.button("Save Configuration"):
             st.session_state.db_url = new_db_url
-            st.session_state.openai_key = new_openai_key
+            st.session_state.ollama_model = new_ollama_model
+            
+            # Reinitialize with Ollama only
+            try:
+                st.session_state.nl_parser = OllamaNLtoSQL(model=new_ollama_model)
+                st.session_state.parser_type = "ollama"
+                st.success(f"✅ Using Ollama ({new_ollama_model})")
+            except Exception as e:
+                st.session_state.nl_parser = LocalNLtoSQL()
+                st.session_state.parser_type = "local"
+                st.error(f"❌ Ollama not available. Install from: https://ollama.ai")
+                st.error(f"Error: {str(e)[:200]}")
+            
             st.rerun()
 
     if not st.session_state.db_url:
@@ -55,7 +87,7 @@ with st.sidebar:
 
 # Use session state values
 DATABASE_URL = st.session_state.db_url
-OPENAI_API_KEY = st.session_state.openai_key
+nl_parser = st.session_state.nl_parser
 
 @st.cache_resource
 def get_engine():
@@ -92,66 +124,8 @@ def get_explain_plan(sql_query):
     except Exception as e:
         return None, str(e)
 
-@st.cache_resource
-def get_vanna():
-    if not OPENAI_API_KEY:
-        return None
-    try:
-        # Vanna 2.x specific imports - using legacy adapters for compatibility
-        try:
-            from vanna.legacy.openai import OpenAI_Chat
-            from vanna.legacy.chromadb import ChromaDB_VectorStore
-        except ImportError:
-            # Fallback for Vanna 1.x
-            from vanna.openai import OpenAI_Chat
-            from vanna.chromadb import ChromaDB_VectorStore
-        
-        class MyVanna(ChromaDB_VectorStore, OpenAI_Chat):
-            def __init__(self, config=None):
-                ChromaDB_VectorStore.__init__(self, config=config)
-                OpenAI_Chat.__init__(self, config=config)
-        
-        vn = MyVanna(config={
-            'api_key': OPENAI_API_KEY,
-            'model': 'gpt-4'  # Fixed model name from gpt-5
-        })
-        
-        # Connect to database based on URL type
-        from sqlalchemy.engine.url import make_url
-        url = make_url(DATABASE_URL)
-        
-        if 'sqlite' in DATABASE_URL.lower():
-            # For SQLite, use the file path from the URL
-            import os
-            db_path = url.database
-            if not os.path.isabs(db_path):
-                # Handle relative paths
-                db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), db_path)
-            vn.connect_to_sqlite(db_path)
-        else:
-            vn.connect_to_postgres(
-                host=url.host,
-                dbname=url.database,
-                user=url.username,
-                password=url.password,
-                port=url.port or 5432
-            )
-        
-        return vn
-    except Exception as e:
-        st.error(f"Error initializing Vanna: {e}")
-        return None
-
-def train_vanna_on_schema(vn):
-    try:
-        vn.train(ddl=DDL_STATEMENTS)
-        vn.train(documentation=DOCUMENTATION)
-        for question, sql in SAMPLE_QUERIES:
-            vn.train(question=question, sql=sql)
-        return True
-    except Exception as e:
-        st.error(f"Error training Vanna: {e}")
-        return False
+# Local NL-to-SQL parser is initialized in session state
+# No external API calls needed!
 
 def get_db_stats():
     engine = get_engine()
@@ -296,55 +270,32 @@ with st.sidebar:
                 st.metric(table.replace("_", " ").title(), count)
     except Exception as e:
         st.error(f"Error loading stats: {e}")
-    
-    st.divider()
-    
-    st.header("🏢 Workspace Filter")
-    workspaces = get_workspaces()
-    workspace_options = ["All Workspaces"] + [w[1] for w in workspaces]
-    selected_workspace = st.selectbox("Filter by Workspace", workspace_options)
-    
-    if selected_workspace != "All Workspaces":
-        workspace_id = next((w[0] for w in workspaces if w[1] == selected_workspace), None)
-        st.session_state.workspace_filter = workspace_id
-    else:
-        st.session_state.workspace_filter = None
-    
-    st.divider()
-    
-    st.header("📝 Query Templates")
-    template_category = st.selectbox("Category", list(QUERY_TEMPLATES.keys()))
-    template_queries = QUERY_TEMPLATES[template_category]
-    selected_template = st.selectbox("Select Template", list(template_queries.keys()))
-    
-    if st.button("Use Template", key="use_template"):
-        st.session_state.template_sql = template_queries[selected_template]
 
 tab1, tab2, tab3 = st.tabs(["🔍 Query", "📊 Analytics Dashboard", "💾 Saved Queries"])
 
 with tab1:
-    if not OPENAI_API_KEY:
-        st.warning("⚠️ OpenAI API key is required for natural language queries. Add the OPENAI_API_KEY secret.")
-        st.info("You can still use SQL templates and raw SQL queries below.")
+    # Show parser type and example questions
+    parser_type = st.session_state.get('parser_type', 'local')
+    if parser_type == 'ollama':
+        st.success("🏠 **Using Ollama (Local LLM)** - 100% Private & Free!")
+    else:
+        st.warning("⚠️ **Ollama not available** - Using basic pattern matching. Install Ollama from: https://ollama.ai")
+    
+    with st.expander("📝 Example Questions You Can Ask"):
+        suggestions = nl_parser.get_suggestions()
+        cols = st.columns(2)
+        for i, suggestion in enumerate(suggestions):
+            with cols[i % 2]:
+                st.markdown(f"- {suggestion}")
     
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        if hasattr(st.session_state, 'template_sql') and st.session_state.template_sql:
-            st.subheader("Template SQL")
-            sql_to_run = st.text_area("SQL Query", value=st.session_state.template_sql, height=100)
-            use_nl = False
-        else:
-            if OPENAI_API_KEY:
-                question = st.text_input(
-                    "Ask a question about your data:",
-                    placeholder="e.g., Show me all failed test runs from last week"
-                )
-                use_nl = True
-            else:
-                sql_to_run = st.text_area("Enter SQL Query:", height=100, 
-                                          placeholder="SELECT * FROM workspaces LIMIT 10")
-                use_nl = False
+        question = st.text_input(
+            "Ask a question about your data:",
+            placeholder="e.g., Show me all workspaces with their agent counts and total billing"
+        )
+        use_nl = True
     
     with col2:
         show_sql = st.checkbox("Show SQL", value=True)
@@ -352,23 +303,20 @@ with tab1:
         show_explain = st.checkbox("Show Query Plan", value=False)
     
     if st.button("🚀 Run Query", type="primary"):
-        if use_nl and OPENAI_API_KEY:
-            vn = get_vanna()
-            if vn and not st.session_state.vanna_trained:
-                with st.spinner("Training AI on database schema..."):
-                    success = train_vanna_on_schema(vn)
-                    if success:
-                        st.session_state.vanna_trained = True
-            
-            if vn and question:
-                with st.spinner("Generating SQL..."):
-                    try:
-                        workspace_hint = ""
-                        if st.session_state.get('workspace_filter'):
-                            workspace_hint = f" (filter by workspace_id = '{st.session_state.workspace_filter}')"
-                        
-                        sql = vn.generate_sql(question + workspace_hint)
+        if use_nl and question:
+            # Use local NL-to-SQL parser
+            with st.spinner("Parsing your question..."):
+                try:
+                    sql, explanation = nl_parser.parse_question(question)
+                    
+                    if sql is None:
+                        st.error(f"❌ {explanation}")
+                        st.info("Try rephrasing your question or use one of the example questions above.")
+                    else:
                         st.session_state.last_sql = sql
+                        
+                        if explanation:
+                            st.success(f"✅ {explanation}")
                         
                         if show_sql:
                             st.subheader("Generated SQL")
@@ -410,8 +358,8 @@ with tab1:
                                 "time": execution_time,
                                 "timestamp": datetime.now().strftime("%H:%M:%S")
                             })
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
         else:
             sql = sql_to_run if 'sql_to_run' in dir() else st.session_state.get('template_sql', '')
             if sql:
@@ -622,4 +570,8 @@ with tab3:
         st.info("No saved queries yet. Run a query and click 'Save Query' to save it.")
 
 st.divider()
-st.caption("Powered by Vanna.ai - Natural Language to SQL")
+parser_type = st.session_state.get('parser_type', 'local')
+if parser_type == 'ollama':
+    st.caption("🏠 Powered by Ollama - Local LLM Running on Your Machine | 100% Private & Free")
+else:
+    st.caption("⚠️ Pattern Matching Mode - Install Ollama for AI: https://ollama.ai")
