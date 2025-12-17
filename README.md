@@ -1,3 +1,11 @@
+## Demo Video
+
+Click the link below to watch a short demo of the application:
+
+▶️ **Watch Demo Video**  
+https://youtu.be/gYY62Lf2m8o
+
+
 # Agent Platform Analytics – Natural Language SQL Interface
 
 A Streamlit-based analytics dashboard that enables users to query an Agent Platform database using natural language. The system converts plain English questions into SQL using a **local large language model (Ollama)** and executes them safely against a SQLite database.
@@ -72,8 +80,4 @@ The application:
 
 ---
 
-## Installation & Setup
 
-### 1. Install Ollama and Model
-```bash
-ollama pull mistral
